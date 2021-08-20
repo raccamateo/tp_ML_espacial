@@ -1,0 +1,46 @@
+---
+title: "TP Machine Learning en Aplicaciones Espaciales"
+subtitle: "FLACSO Argentina"
+author: "Mateo W. Racca"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: sandstone
+    fig_caption: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## ¿Qué es esto?
+
+
+Este es el trabajo final del módulo Machine Learning en Aplicaciones Espaciales a cargo del Dr. Germán Rosati en el marco del Posgrado en Big Data y Desarrollo Territorial de FLACSO Argentina (2020).
+
+
+El objetivo principal es generar un modelo que permita valorizar los departamentos en venta de la Ciudad Autónoma de Buenos Aires. Para eso se va a trabajar con una regresión lineal, un árbol basado en CART y un ensamble. Luego, se van a comparar performances y se seleccionará el modelo más adecuado para abordar el problema en cuestión.
+
+
+
+
+## ¿Qué datos se van a usar?
+
+
+El dataset *ED_deptos_venta_2014.csv* tiene los resultados correspondientes al año 2014 de un relevamiento muestral de los avisos en diarios y sitios web sobre los precios de departamentos en la Ciudad Autónoma de Buenos Aires. El relevamiento se realizaba todos los años, desde 2001 y el dataset tiene información sobre los precios totales y por metro cuadrado (en U$D).
+
+
+La librerías a utilizar son:
+
+```{r base, results='hide', collapse=FALSE, include=FALSE}
+#packages
+
+#create color palette
+colorcito <- c("#cfa8e6", "#bae1ff", "#a8e6cf", "#ffd3b6", "#dcedc1", "#ffaaa5", "#ffd86c", "#e2caf0", "#d5edff", "#d8b9eb", "#c7e7ff", "#b9ebd8", "#ffdbc4", "#e3f0cd", "#ffbbb7", "#ffe59f")
+```
