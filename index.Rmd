@@ -6,7 +6,7 @@ date: "`r format(Sys.time(), '%d/%m/%y')`"
 output:
   html_document:
     toc: true
-    toc_depth: 3
+    toc_depth: 4
     toc_float: true
     theme: sandstone
     fig_caption: true
@@ -17,7 +17,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-
+<p>&nbsp;</p>
 
 ## ¿Qué es esto?
 
@@ -25,22 +25,561 @@ knitr::opts_chunk$set(echo = TRUE)
 Este es el trabajo final del módulo Machine Learning en Aplicaciones Espaciales a cargo del Dr. Germán Rosati en el marco del Posgrado en Big Data y Desarrollo Territorial de FLACSO Argentina (2020).
 
 
-El objetivo principal es generar un modelo que permita valorizar los departamentos en venta de la Ciudad Autónoma de Buenos Aires. Para eso se va a trabajar con una regresión lineal, un árbol basado en CART y un ensamble. Luego, se van a comparar performances y se seleccionará el modelo más adecuado para abordar el problema en cuestión.
+El objetivo principal es generar un modelo que permita valorizar los departamentos en venta (valor en dólares/metro cuadrado) de la Ciudad Autónoma de Buenos Aires. Para eso se va a trabajar con una regresión lineal, un árbol basado en CART y un ensemble. Luego, se van a comparar performances y se seleccionará el modelo más adecuado para abordar el problema en cuestión.
 
-
-
+<p>&nbsp;</p>
 
 ## ¿Qué datos se van a usar?
 
 
-El dataset *ED_deptos_venta_2014.csv* tiene los resultados correspondientes al año 2014 de un relevamiento muestral de los avisos en diarios y sitios web sobre los precios de departamentos en la Ciudad Autónoma de Buenos Aires. El relevamiento se realizaba todos los años, desde 2001 y el dataset tiene información sobre los precios totales y por metro cuadrado (en U$D).
+El dataset *deptos_venta_2014.csv* tiene los resultados correspondientes al año 2014 de un relevamiento muestral de los avisos en diarios y sitios web sobre los precios de departamentos en la Ciudad Autónoma de Buenos Aires. 
+
+El relevamiento se realizaba todos los años, desde 2001 y el dataset tiene información sobre los precios totales y por metro cuadrado (en U$D).
+
+<p>&nbsp;</p>
+
+## ¿Cuál es la variable a predecir?
 
 
-La librerías a utilizar son:
+En este caso, se podría predecir el precio total del departamento como así también el precio por metro cuadrado (ambos en dólares). Este trabajo se va a enfocar en el precio en dólares por metro cuadrado (*USD/M2*).
 
-```{r base, results='hide', collapse=FALSE, include=FALSE}
-#packages
+<p>&nbsp;</p>
 
-#create color palette
+### Paquetes y carga de datos
+
+
+Los paquetes a utilizar son:
+
+
+```{r, results = "hide", message=FALSE}
+library(caret)
+library(rpart)
+library(tidyverse)
+library(sf)
+library(viridis)
+library(ggpubr)
+library(iml)
+library(pdp)
+
+#crear paleta de colores
 colorcito <- c("#cfa8e6", "#bae1ff", "#a8e6cf", "#ffd3b6", "#dcedc1", "#ffaaa5", "#ffd86c", "#e2caf0", "#d5edff", "#d8b9eb", "#c7e7ff", "#b9ebd8", "#ffdbc4", "#e3f0cd", "#ffbbb7", "#ffe59f")
 ```
+
+<p>&nbsp;</p>
+
+El dataset está disponible en el repositorio de github, al igual que el código en formato .rmd y el resultado en .html.
+
+
+```{r}
+#lectura del dataset
+data <- read.delim2("deptos_2014.csv", sep = ";", comment.char = "", check.names = F, encoding = "Latin-1") 
+
+#renombrar columna con error de lectura
+names(data)[names(data) == "BA\xc3.OS"] <- "BAÑOS"
+```
+
+<p>&nbsp;</p>
+
+### Análisis de variables y limpieza de datos
+
+Antes de empezar es necesario conocer los datos originales para luego limpiar y/o reorganizar el dataset.
+
+
+```{r}
+str(data)
+```
+
+<p>&nbsp;</p>
+
+En cuanto a valores perdidos:
+
+```{r}  
+head(is.na(data), n=15)
+```
+
+<p>&nbsp;</p>
+
+Algunas variables están configuradas de manera poco conveniente. Otras no son necesarias, como es el caso de las variables *BARRIO*, *LAT* (latitud) y *LON* (longitud) ya que hacen referencia a la ubicación espacial de las propiedades y contamos con información relacionada en las variables *CALLE*, *COMUNA* y *NÚMERO*. Por otro lado, la variable *DOLARES* no será considerada ya que expresa el precio total de los departamentos en venta y se va a utilizar como referencia/variable objetiva *USD_M2*.
+
+```{r, results = "hide", message=FALSE}
+data <- data %>%
+  select(-BARRIO, -LAT, -LON, -DOLARES) %>%
+  rename(ORIENTACION = ORIENT,
+         USD_M2 = U_S_M2)
+```
+
+<p>&nbsp;</p>
+
+#### Antigüedad
+
+Como la variable acerca de la antigüedad de los departamentos presenta valores perdidos, es pertinente visualizarla a través de un boxplot.
+
+```{r}
+boxplot(x = data$ANTIGUEDAD, col = colorcito, main = "Antigüedad de departamentos en venta en CABA - 2014", xlab="Antiguedad (en años)", horizontal = TRUE)
+```
+
+<p>&nbsp;</p>
+
+Ahora las estadísticas de resumen:
+
+```{r}
+summary(data$ANTIGUEDAD)
+```
+
+<p>&nbsp;</p>
+
+Se puede observar que el promedio de antigüedad es de 28 años, mientras que el valor del tercer quartil es de 40 años de antigüedad y el máximos es de 115 años. Hay 2782 departamentos en el dataset que tienen valores perdidos en esta variable. 
+
+<p>&nbsp;</p>
+
+
+#### Ajuste de variables
+
+Es necesario entonces reordenar y recodificar algunas variables:
+
+```{r, results = "hide", message=FALSE}
+data <- data %>%
+  mutate(
+    BAÑOS = case_when(
+      BAÑOS == 0 ~ "S/D",
+      BAÑOS == 1 ~ "1",
+      BAÑOS == 2 ~ "2",
+      BAÑOS >= 3 ~ "3 o +"),
+    AMBIENTES = case_when(
+      AMBIENTES <= 1 ~ "1",
+      AMBIENTES == 2 ~ "2",
+      AMBIENTES == 3 ~ "3",
+      AMBIENTES > 3 ~ "mas de 3"),
+    COMUNA = as.factor(COMUNA),
+    ANTIGUEDAD = as.character(ANTIGUEDAD),
+    ANTIGUEDAD = case_when(
+      ANTIGUEDAD == 'A ESTRENAR' ~ '0',
+      is.na(ANTIGUEDAD) ~ '0',
+      TRUE ~ ANTIGUEDAD),
+    ANTIGUEDAD = as.numeric(ANTIGUEDAD),
+    USD_M2 = as.numeric(USD_M2),
+    CALLE = as.factor(CALLE),
+    ORIENTACION = as.factor(ORIENTACION)) %>%
+  drop_na()
+```
+
+<p>&nbsp;</p>
+
+#### Precio en USD por metro cuadrado
+
+El precio en dólares por metro cuadrado de los departamentos es la variable a predecir. Para entenderla mejor, es pertinente ver los datos en un boxplot: 
+
+<p>&nbsp;</p>
+
+```{r}
+boxplot(x = data$USD_M2, col = colorcito, main = "Precio en USD/m2 de departamentos en CABA - 2014", xlab="USD", horizontal = TRUE)
+```
+
+<p>&nbsp;</p>
+
+Las estadísticas de resumen:
+
+```{r}
+summary(data$USD_M2)
+```
+
+<p>&nbsp;</p>
+
+El precio promedio del metro cuadrado (en dólares) es de 2321, mientras que el mínimo es de 316 y el máximo de 9259; aunque el tercer cuartil tiene un valor de 2655 por lo que el máximo es poco habitual y también poco representativo de la muestra.
+
+<p>&nbsp;</p>
+
+#### Ubicación de los departamentos
+
+En cuanto al número de departamentos disponibles por comuna:
+
+```{r, results = "hide", message=FALSE}
+sumatoria_comunas <- data %>%
+  group_by(COMUNA) %>%
+  summarise(sumatoria = n()) %>%
+  arrange(desc(sumatoria))
+```
+
+```{r}
+ggplot(data = sumatoria_comunas, aes(x = reorder(COMUNA, (-sumatoria)), y = sumatoria, fill = COMUNA)) + 
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title="Departamentos en venta por comuna en CABA - 2014",
+  x="Comuna", 
+  y= "Departamentos") + 
+  scale_fill_manual(values = colorcito) +
+  theme_minimal() 
+```
+
+<p>&nbsp;</p>
+
+Se toman los datos geográficos sobre las comunas, para luego poder ubicar las propiedades en el mapa:
+
+
+```{r, results = "hide", message=FALSE}
+comunas <- st_read("https://bitsandbricks.github.io/data/CABA_comunas.geojson") %>%
+  rename(COMUNA = comunas) %>%
+  select(-barrios) %>%
+  mutate(COMUNA = as.factor(COMUNA))
+
+data_comunas <- data %>%
+  group_by(COMUNA) %>%
+  count() %>%
+  rename(TOTAL_DEPTOS = n)
+
+mapa <- left_join(comunas, data_comunas)
+```
+
+<p>&nbsp;</p>
+
+```{r}
+ggplot() +
+  geom_sf(data = mapa, aes(fill = TOTAL_DEPTOS)) +
+  scale_fill_viridis() +
+  labs (title= "Departamentos en venta por comuna", subtitle = "Ciudad Autónoma de Buenos Aires - 2014", fill = "Número de departamentos") +
+  theme_void()
+```
+
+<p>&nbsp;</p>
+
+## Los modelos
+
+Tal como se planteó al principio y con el objetivo de generar un modelo que permita valorizar los departamentos en venta de la Ciudad Autónoma de Buenos Aires (en *USD/M2*). Se trabajará con una regresión lineal, un árbol basado en CART y un ensemble. 
+
+<p>&nbsp;</p>
+
+El primer paso, clave para la replicabilidad del caso y de los modelos, es fijar la aleatoriedad con la función *set.seed()*:
+
+
+```{r}
+set.seed(221)
+```
+
+<p>&nbsp;</p>
+
+*createDataPartition()* nos permite generar índices para la partición: 
+
+
+```{r}
+tr_index <- createDataPartition(y = data$USD_M2,
+                                p = 0.7,
+                                list = FALSE)
+```
+
+<p>&nbsp;</p>
+
+Dónde *y* representa la variable a predecir y *p* el temaño de la muestra de entrenamiento (70% del dataset original).
+
+<p>&nbsp;</p>
+
+*slice()* nos permite tomar el dataset original y dividirlo en uno de entrenamiento (*train*) y otro de evaluación (*test*): 
+
+
+```{r}
+train <- data %>% slice(tr_index)
+
+test <- data %>% slice(-tr_index)
+```
+
+<p>&nbsp;</p>
+
+Con el objetivo de estimar el error de generalización, se utiliza el método de *Validación Cruzada* (en inglés, *Cross Validation*). Para eso se toman los datos de entrenamiento:
+
+
+```{r}
+cv_index <- createFolds(y = train$USD_M2,
+                        k = 5,
+                        list = TRUE,
+                        returnTrain = TRUE)
+```
+
+<p>&nbsp;</p>
+
+Y se definen los parámetros de control de ajuste:
+
+
+```{r}
+fitControl <- trainControl(
+        index = cv_index,
+        method = "cv",
+        number = 5)
+```
+
+<p>&nbsp;</p>
+
+
+### Regresión lineal múltiple
+
+El primer modelo a entrenar/utilizar es uno de regresión lineal múltiple. Para eso: 
+
+
+```{r, warning=FALSE}
+lm_fit <- train(USD_M2~.,
+                data = train,
+                method = "lm",
+                trControl = fitControl)
+```
+
+<p>&nbsp;</p>
+
+Ahora, vamos a los resultados: 
+
+```{r}
+lm_fit
+```
+
+<p>&nbsp;</p>
+
+### CART: Árbol de decisión
+
+En segunda instancia, se procede a entrenar un modelo CART (árbol de decisión). Primero, se establecen los hiperparámetros:
+
+```{r}
+grid <- expand.grid(maxdepth=c(1, 3, 9, 18, 27))
+```
+
+<p>&nbsp;</p>
+
+Luego, se entrena el modelo:
+
+```{r}
+cart_dptos <- train(USD_M2 ~ . , 
+                 data = train, 
+                 method = "rpart2", 
+                 trControl = fitControl,
+                 tuneGrid = grid)
+```
+
+<p>&nbsp;</p>
+
+Ahora, vamos a los resultados:
+
+```{r}
+cart_dptos
+```
+
+<p>&nbsp;</p>
+
+
+### Random Forest 
+
+Finalmente, el tercer modelo a entrenar es un modelo de ensemble, en este caso random forest. 
+
+```{r}
+grid_rf <- expand.grid(mtry = c(15, 30, 60), 
+                       min.node.size = c(1, 3, 5),
+                       splitrule = "extratrees")
+```
+
+<p>&nbsp;</p>
+
+```{r}
+rf_fit <-  train(USD_M2 ~ . , 
+                 data = train, 
+                 method = "ranger", 
+                 trControl = fitControl,
+                 tuneGrid = grid_rf)
+```
+
+ <p>&nbsp;</p>
+ 
+ 
+Ahora, vamos a los resultados:
+
+```{r}
+rf_fit
+```
+
+<p>&nbsp;</p>
+
+
+## Comparando Modelos
+
+Ahora que los modelos están entrenados, se va a comparar su performance en el set de datos de testeo. Para eso se crea una función de evaluación:
+
+```{r, warning=FALSE}
+eval_regresion <- function(model, test_set, y){
+  preds <- predict(model, test_set)
+  metrics <- postResample(preds, y) 
+  return(metrics)
+  }
+```
+
+<p>&nbsp;</p>
+
+
+Ahora se listan los modelos para identificarlos fácilmente:
+
+```{r, warning=FALSE}
+models <- list(lm = lm_fit,
+               cart = cart_dptos,
+               rf = rf_fit)
+```
+
+<p>&nbsp;</p>
+
+
+Y se sacan las métricas:
+
+```{r, warning=FALSE}
+model_metrics <- models %>%
+        map(eval_regresion, test, test$USD_M2)
+```
+
+<p>&nbsp;</p>
+
+Ahora se puede observar la evaluación final de los modelos: 
+
+```{r}
+model_metrics
+```
+
+<p>&nbsp;</p>
+
+
+Respecto a la performance de los tres modelos:
+
+- *RMSE* o *raíz cuadrada del error cuadrático medio*: los valores alcanzados por los modelos *lm* y *rf* son similares aunque el ensemble resulta algo más acertado.
+
+- *Rsquared* o *R Cuadrado*: *rf* tiene mejor performance.
+
+- *MAE* o *error absoluto medio*: en este apartado también el modelo *rf* logró el mejor resultado.
+
+<p>&nbsp;</p>
+
+Los resultados en un gráfico:
+
+```{r, warning=FALSE}
+model_preds <- models %>%
+        map(predict, test) %>%
+        as_tibble() %>%
+        mutate(y = test$USD_M2)
+
+final_model_preds <- model_preds %>%
+  pivot_longer(!y, names_to = "modelo", values_to = "pred")
+  
+  
+ggplot(final_model_preds) + 
+  geom_point(aes(x = pred, y = y, color = modelo)) +
+  labs(title = "Evaluación de modelos",
+       subtitle = "Precio de departamentos en USD/M2",
+       x = "Predicciones",
+       y = "Observaciones",
+       color = "Modelo:") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+```
+
+<p>&nbsp;</p>
+
+
+## Interpretable Machine Learning
+
+La bibliografía y el material de clase aportan que para interpretar los modelos de machine learning hay diferentes herramientas. En este caso, se evaluará con: Variable Importance, Partial Dependence Plots (*PDP*) e Individual Conditional Expectation (*ICE*). 
+
+<p>&nbsp;</p>
+
+
+### Variable Importance
+
+Identifica las variables de mayor importancia/peso sobre la variable a predecir.
+
+```{r, warning=FALSE}
+varimp <- function(data, y, model, loss='mse'){
+  bool <- !names(data) %in% y
+  X <- data[,bool]
+  predic <- iml::Predictor$new(model, data=X, y=data[y])
+  vi <- iml::FeatureImp$new(predic, loss='mse')
+  return(vi)
+  }
+```
+
+<p>&nbsp;</p>
+
+```{r}
+ggarrange(plot(varimp(data = train, y = "USD_M2", model = rf_fit)),
+          plot(varimp(data = test, y = "USD_M2", model = rf_fit))) 
+```
+
+<p>&nbsp;</p>
+
+El plot de la izquierda corresponde a los datos de entrenamiento y el de la derecha a los de validación. Las variables que más ponderan en relación a la variable a predecir (*U$D/M2*) son: 
+
+- La comuna en la que se ubica el departamento.
+
+- La calle sobre la que se encuetra.
+
+- Si tiene o no cochera.
+
+- La antigüedad del mismo.
+
+El resto de las variables tienen una importancia menor.
+
+<p>&nbsp;</p>
+
+
+### Partial Dependence Plots
+
+Visualiza el efecto marginal de una o dos variables independientes sobre la variable que predijo un modelo. Estima cómo varía el valor de la variable a predecir (*y*) a medida que cambian los valores de las variables independientes (*x*). 
+
+Puede ser utilizado en variables cuantitativas, y como *ANTIGUEDAD* fue la variable numérica que más importancia tuvo en el análisis de *Variable Importance*:
+
+
+```{r}
+rf_fit %>%
+  partial(pred.var = "ANTIGUEDAD") %>%
+  ggplot(aes(x = ANTIGUEDAD, y = yhat)) +
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  theme_minimal()
+```
+
+<p>&nbsp;</p>
+
+Tal como se puede observar, el *yhat* o valor predicho cae a medida que la variable *ANTIGUEDAD* tiene valores mayores. En color negro aparecen los valores normales y en azul suavizados.
+
+<p>&nbsp;</p>
+
+
+### Individual Conditional Expectation 
+
+Visualiza una linea por instancia que muestra cómo cambia la predicción de la instancia a medida que cambia una característica.
+
+En este  caso:
+
+```{r, warning=FALSE}
+ggarrange(partial(rf_fit, pred.var = "ANTIGUEDAD", plot = TRUE, ice = TRUE, rug = TRUE, plot.engine = "ggplot", alpha = 0.2))
+```
+
+<p>&nbsp;</p>
+
+El resultado es una línea por departamento a la venta (en negro) y una única línea de desempeño general (en rojo). La mayoría de los casos comparten un patron: a menor antigüedad mayor precio, aunque como se puede observar la pendiente no es abismal y en consecuencia la baja del precio tampoco. En algunos casos esto no se cumple y la antigüedad no es sinónimo de caída de precio mientras que en otros (sobre todo cuando el valor del metro cuadrado es mayor) los inmuebles pierden valor después de los primeros años.
+
+El punto de quiebre se da al rededor de los 15 años de antigüedad, a partir de donde el precio según se puede observar cae de manera suave, pero progresiva y constante.
+
+<p>&nbsp;</p>
+
+
+## Conclusiones
+
+Ell objetivo de este trabajo es generar un modelo que permita valorizar los departamentos en venta (*U$S/M2*) en la Ciudad Autónoma de Buenos Aires.
+
+
+Después de trabajar con una regresión lineal, un árbol de decisión (CART) y un modelo de ensemble (random forest) y de comparar sus performances random forest (*rf*) resultó el más adecuado para el problema en cuestión.
+
+
+**¿Por qué?**:
+
+- En cuanto al *RMSE*, el ensemble resulta algo más acertado que los demás modelos.
+
+- En el valor de *Rsquared* el modelo rf tiene mejor performance.
+
+- En el caso del *MAE*, rf también logró el mejor resultado.
+
+
+Una vez seleccionado el modelo y para lograr mayor interpretabilidad del mismo se recurrió a análisis con *Variable Importance*, *Partial Dependence Plots* y también *Individual Conditional Expectation*. Esto fue clave para detectar las variables de mayor influencia sobre la variable a predecir, que son: *comuna, calle, cochera y antigüedad* y también para hacer foco en la influencia de esta última variable sobre el precio en dólares por metro cuadrado. A medida que la antigüedad es mayor el precio tiende a caer, y si bien no es el factor más determinante tiene una influencia marcada y progresiva.
+
+
+Es importante destacar también que este modelo no es absoluto y que la variable a predecir es compleja. Si bien el modelo de ensemble tiene cierta complejidad hay muchísimos factores que quedan excluidos y que podrían ser relevantes como por ejemplo: el acceso a servicios básicos de salud, transporte y educación, a espacios verdes, a locales de compras esenciales y de actividades recreativas; los índices de contaminación del aire y sonora, y muchas otras cosas que escapan el alcance de los modelos entrenados y también de los datos con los que contamos.
+
+
+Más allá de eso, la capacidad predictiva del modelo es (al menos) aceptable y puede resultar útil.
